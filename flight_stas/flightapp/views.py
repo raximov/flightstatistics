@@ -7,10 +7,13 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.http import JsonResponse
 from rest_framework import status
-from django.db import connection
 from django.db.models import Count, Avg, F, ExpressionWrapper, DurationField, Q
 from django.contrib.postgres.aggregates import ArrayAgg
+from django.db import connection
+from datetime import datetime
+import json
 import ast
+
 
 from .models import AirportsData, Flights, TicketFlights
 
@@ -184,6 +187,7 @@ class FlightStatisticsAPIView3(APIView):
         from_date_str = request.GET.get('from_date')
         to_date_str = request.GET.get('to_date')
 
+
         dep_airport = AirportsData.objects.filter(
             airport_name__en=departure_airport_name
         ).first()
@@ -191,8 +195,10 @@ class FlightStatisticsAPIView3(APIView):
         if not dep_airport:
             return Response({'error': 'Airport not found'}, status=404)
 
+
         from_date = timezone.datetime.fromisoformat(from_date_str)
         to_date = timezone.datetime.fromisoformat(to_date_str) + timedelta(days=1)
+
 
         dep_coords = ast.literal_eval(dep_airport.coordinates)
         dep_lon, dep_lat = dep_coords
@@ -261,13 +267,14 @@ class FlightStatisticsAPIView3(APIView):
             arr_lat_rad = math.radians(arr_lat)
             arr_lon_rad = math.radians(arr_lon)
             
-            
-            distance_km = 6371 * math.acos(
+            try:
+                distance_km = 6371 * math.acos(
                     math.cos(dep_lat_rad) * math.cos(arr_lat_rad) *
                     math.cos(arr_lon_rad - dep_lon_rad) +
                     math.sin(dep_lat_rad) * math.sin(arr_lat_rad)
                 )
-            
+            except ValueError:
+                distance_km = 0
 
             avg_flight_time = avg_time_map.get(arrival_airport_code)
             avg_time_str = None
@@ -278,12 +285,103 @@ class FlightStatisticsAPIView3(APIView):
             results.append({
                 'arrival_airport': arrival_airport_code,
                 'airport_name': arrival_airport.airport_name.get('en', ''),
+                # 'flight_ids': stat['flight_ids'],
                 'avg_flight_time': avg_time_str,
                 'flight_count': stat['flight_count'],
-                'passenger_count': passenger_count,  
+                'passenger_count': passenger_count, 
                 'distance_km': round(distance_km, 3)
             })
 
         results.sort(key=lambda x: x['distance_km'])
         
         return Response(results)
+        
+
+
+
+class FlightStatisticsSQL4(APIView):
+    def get(self, request):
+
+        departure_airport = request.GET.get('departure_airport')
+        from_date = request.GET.get('from_date')
+        to_date = request.GET.get('to_date')
+        
+        query = """
+        WITH depcity AS (
+            SELECT airport_code,  
+                   RADIANS(a.coordinates[1])::float8 AS dep_lat,
+                   RADIANS(a.coordinates[0])::float8 AS dep_lon
+            FROM bookings.airports_data a
+            WHERE airport_name ->> 'en' = %s
+        ),
+        filtered_flights AS (
+            SELECT f.*
+            FROM bookings.flights f
+            JOIN depcity d ON f.departure_airport = d.airport_code
+            WHERE f.scheduled_departure >= %s
+              AND f.scheduled_departure < %s
+        ),
+        flights_list AS (
+            SELECT 
+                arrival_airport,
+                ARRAY_AGG(flight_id) AS flight_ids,  
+                AVG(actual_arrival - actual_departure) AS avg_flight_time,
+                COUNT(flight_id) AS flight_count
+            FROM filtered_flights
+            GROUP BY arrival_airport
+        )
+        SELECT 
+            ad.airport_name ->> 'en' AS airport_name,
+            ROUND(
+              6371 * ACOS(
+                  COS(d.dep_lat) * COS(RADIANS(ad.coordinates[1])) *
+                  COS(RADIANS(ad.coordinates[0]) - d.dep_lon) +
+                  SIN(d.dep_lat) * SIN(RADIANS(ad.coordinates[1]))
+              )::numeric, 3
+            ) AS distance_km,
+            fl.avg_flight_time,
+            fl.flight_count,
+            (
+                SELECT COUNT(*) 
+                FROM bookings.ticket_flights tf
+                WHERE tf.flight_id = ANY(fl.flight_ids)
+            ) AS passenger_count
+        FROM flights_list fl
+        JOIN bookings.airports_data ad
+          ON ad.airport_code = fl.arrival_airport
+        CROSS JOIN depcity d   
+        ORDER BY distance_km ASC;
+        """
+        
+        try:
+            with connection.cursor() as cursor:
+
+                cursor.execute(query, [departure_airport, from_date, to_date])
+                results = cursor.fetchall()
+                
+
+                flights_data = []
+                for row in results:
+                    flights_data.append({
+                        'airport_name': row[0],
+                        'distance_km': float(row[1]) if row[1] else None,
+                        'avg_flight_time': str(row[2]) if row[2] else None,
+                        'flight_count': row[3],
+                        'passenger_count': row[4]
+                    })
+                
+                return JsonResponse({
+                    
+                    'data': flights_data,
+                })
+                
+        except Exception as e:
+            return JsonResponse({
+                'status': 'error',
+                'message': str(e),
+                'parameters': {
+                    'departure_airport': departure_airport,
+                    'from_date': from_date,
+                    'to_date': to_date
+                }
+            }, status=500)
