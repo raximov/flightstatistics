@@ -19,7 +19,7 @@ class AirportsData(models.Model):
     airport_code = models.CharField(max_length=3, primary_key=True)
     airport_name = models.JSONField()
     city = models.JSONField()
-    coordinates = gis_models.PointField(srid = 4326)
+    coordinates = gis_models.PointField(srid = 4326, geography=True)
     timezone = models.CharField(max_length=50)
 
     class Meta:
