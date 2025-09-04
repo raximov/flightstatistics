@@ -1,5 +1,5 @@
 
-#bash
+# bash da
 sudo apt update
 sudo apt install postgis postgresql-14-postgis-3
 pip install psycopg2-binary
