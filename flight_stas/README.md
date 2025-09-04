@@ -35,7 +35,7 @@ from django.contrib.gis.db import models as gis_models
 class AirportsData(models.Model): 
   coordinates = gis_models.PointField(srid=4326, null=True, blank=True) 
   
-
+# bash da
 python manage.py makemigrations 
 python manage.py migrate
 
