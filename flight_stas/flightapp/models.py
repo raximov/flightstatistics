@@ -1,3 +1,5 @@
+from django.contrib.gis.db import models as gis_models
+from django.contrib.gis.geos import Point
 from django.db import models
 
 class AircraftsData(models.Model):
@@ -17,7 +19,7 @@ class AirportsData(models.Model):
     airport_code = models.CharField(max_length=3, primary_key=True)
     airport_name = models.JSONField()
     city = models.JSONField()
-    coordinates = models.CharField(max_length=50)
+    coordinates = gis_models.PointField(srid = 4326)
     timezone = models.CharField(max_length=50)
 
     class Meta:
@@ -25,6 +27,12 @@ class AirportsData(models.Model):
 
     def __str__(self):
         return self.airport_code
+    
+    def _get_coordinates_db_type(self, connection):
+        # Explicitly return the correct PostGIS type and avoid default casting
+        return 'geometry(Point, 4326)'
+
+    coordinates._get_db_type = _get_coordinates_db_type
 
 
 class Bookings(models.Model):

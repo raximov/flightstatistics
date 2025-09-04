@@ -40,7 +40,9 @@ INSTALLED_APPS = [
 
     'rest_framework',
     'flightapp',
-    'psycopg2'
+    'psycopg2',
+    'django.contrib.gis',  # Make sure this is included
+
 ]
 
 MIDDLEWARE = [
@@ -79,14 +81,17 @@ WSGI_APPLICATION = 'flight_stas.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.postgresql',
+        'ENGINE': 'django.contrib.gis.db.backends.postgis',
         'NAME': 'demo',
         'USER': 'postgres',
         'PASSWORD': 'password',
         'HOST': '127.0.0.1',
         'PORT': '5432',
         'OPTIONS': {
-            'options': '-c search_path=bookings,public'
+            'options': '-c search_path=bookings,public',
+            'sslmode': 'disable'
+
+
         },
     }
 }

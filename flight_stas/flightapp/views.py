@@ -1,21 +1,21 @@
 from datetime import timedelta
-from math import radians, cos, sin, acos
 import math
+from math import radians, sin ,cos , acos
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.http import JsonResponse
 from rest_framework import status
-from django.db.models import Count, Avg, F, ExpressionWrapper, DurationField, Q
+from django.db.models import Count, Avg, F, ExpressionWrapper, DurationField, FloatField
 from django.contrib.postgres.aggregates import ArrayAgg
 from django.db import connection
-from datetime import datetime
-import json
 import ast
-
+# from django.contrib.gis.db.models.functions import Distance
+        
 
 from .models import AirportsData, Flights, TicketFlights
+
 
 
 def haversine_distance(lat1, lon1, lat2, lon2):
@@ -178,139 +178,128 @@ class FlightStatistics2(APIView):
             'departure_airport': departure_airport.airport_code,
             'arrival_stats': results
         }, status=200)
+    
+
 
 
 
 class FlightStatisticsAPIView3(APIView):
-    def get(self, request, *args, **kwargs):
-        departure_airport_name = request.GET.get('departure_airport')
-        from_date_str = request.GET.get('from_date')
-        to_date_str = request.GET.get('to_date')
-
-
-        dep_airport = AirportsData.objects.filter(
-            airport_name__en=departure_airport_name
-        ).first()
+    def get(self, request):
+        departure_airport_name = request.GET.get('departure_airport_name')
+        from_date = request.GET.get('from_date')
+        to_date = request.GET.get('to_date')
         
-        if not dep_airport:
-            return Response({'error': 'Airport not found'}, status=404)
-
-
-        from_date = timezone.datetime.fromisoformat(from_date_str)
-        to_date = timezone.datetime.fromisoformat(to_date_str) + timedelta(days=1)
-
-
-        dep_coords = ast.literal_eval(dep_airport.coordinates)
-        dep_lon, dep_lat = dep_coords
-        dep_lat_rad = math.radians(dep_lat)
-        dep_lon_rad = math.radians(dep_lon)
-
-        all_flights = Flights.objects.filter(
-            departure_airport=dep_airport,
-            scheduled_departure__gte=from_date,
-            scheduled_departure__lt=to_date
-        ).values('arrival_airport').annotate(
-            flight_ids=ArrayAgg('flight_id'),
-            flight_count=Count('flight_id')
-        ).order_by('arrival_airport')
-
-        completed_flights_avg = Flights.objects.filter(
-            departure_airport=dep_airport,
-            scheduled_departure__gte=from_date,
-            scheduled_departure__lt=to_date,
-            actual_departure__isnull=False,
-            actual_arrival__isnull=False
-        ).values('arrival_airport').annotate(
-            avg_flight_time=Avg(
-                ExpressionWrapper(
-                    F('actual_arrival') - F('actual_departure'),
-                    output_field=DurationField()
-                )
-            )
-        )
-
-        avg_time_map = {item['arrival_airport']: item['avg_flight_time'] for item in completed_flights_avg}
-
-        arrival_airport_codes = [stat['arrival_airport'] for stat in all_flights]
-        arrival_airports = AirportsData.objects.filter(
-            airport_code__in=arrival_airport_codes
-        )
-        arrival_airport_map = {airport.airport_code: airport for airport in arrival_airports}
-
-        all_flight_ids = []
-        for stat in all_flights:
-            all_flight_ids.extend(stat['flight_ids'])
+        if not departure_airport_name:
+            return Response({
+                'status': 'error',
+                'message': 'Missing required parameter: departure_airport_name'
+            }, status=status.HTTP_400_BAD_REQUEST)
         
-        passenger_counts = TicketFlights.objects.filter(
-            flight_id__in=all_flight_ids
-        ).values('flight_id').annotate(
-            passenger_count=Count('flight_id')
-        )
-        
-        flight_passenger_map = {pc['flight_id']: pc['passenger_count'] for pc in passenger_counts}
+        if not from_date or not to_date:
+            return Response({
+                'status': 'error',
+                'message': 'Missing required parameters: from_date and to_date'
+            }, status=status.HTTP_400_BAD_REQUEST)
 
-        results = []
-        for stat in all_flights:
-            arrival_airport_code = stat['arrival_airport']
-            arrival_airport = arrival_airport_map.get(arrival_airport_code)
+        try:
+            from .models import AirportsData, Flights, TicketFlights
             
-            if not arrival_airport:
-                continue
-
-            passenger_count = sum(
-                flight_passenger_map.get(flight_id, 0) 
-                for flight_id in stat['flight_ids']
-            )
-
-            arr_coords = ast.literal_eval(arrival_airport.coordinates)
-            arr_lon, arr_lat = arr_coords
-            arr_lat_rad = math.radians(arr_lat)
-            arr_lon_rad = math.radians(arr_lon)
+            # Get departure airport
+            dep_airport = AirportsData.objects.get(airport_name__en=departure_airport_name)
             
-            try:
-                distance_km = 6371 * math.acos(
-                    math.cos(dep_lat_rad) * math.cos(arr_lat_rad) *
-                    math.cos(arr_lon_rad - dep_lon_rad) +
-                    math.sin(dep_lat_rad) * math.sin(arr_lat_rad)
-                )
-            except ValueError:
-                distance_km = 0
-
-            avg_flight_time = avg_time_map.get(arrival_airport_code)
-            avg_time_str = None
-            if avg_flight_time:
-                total_seconds = avg_flight_time.total_seconds()
-                avg_time_str = str(timedelta(seconds=int(total_seconds)))
-
-            results.append({
-                'arrival_airport': arrival_airport_code,
-                'airport_name': arrival_airport.airport_name.get('en', ''),
-                # 'flight_ids': stat['flight_ids'],
-                'avg_flight_time': avg_time_str,
-                'flight_count': stat['flight_count'],
-                'passenger_count': passenger_count, 
-                'distance_km': round(distance_km, 3)
-            })
-
-        results.sort(key=lambda x: x['distance_km'])
+            # Use PostGIS ST_DistanceSphere function
+            from django.db.models.expressions import RawSQL
+            
+            # Calculate distance in kilometers using ST_DistanceSphere
+            distance_sql = """
+                ST_DistanceSphere(
+                    ST_MakePoint(%s, %s),
+                    ST_MakePoint(
+                    ST_X(coordinates),
+                    ST_Y(coordinates)
+                    )
+                ) / 1000.0
+            """ % (dep_airport.coordinates.x, dep_airport.coordinates.y)
+            
+            # Main query using pure Django ORM with PostGIS
+            results = AirportsData.objects.filter(
+                arriving_flights__departure_airport=dep_airport,
+                arriving_flights__scheduled_departure__gte=from_date,
+                arriving_flights__scheduled_departure__lt=to_date
+            ).annotate(
+                distance_km=RawSQL(distance_sql, (), output_field=FloatField()),
+                avg_flight_time=Avg(
+                    F('arriving_flights__actual_arrival') - 
+                    F('arriving_flights__actual_departure')
+                ),
+                flight_count=Count('arriving_flights'),
+                passenger_count=Count('arriving_flights__ticketflights__ticket_no')
+            ).values(
+                'airport_name__en', 
+                'distance_km', 
+                'avg_flight_time', 
+                'flight_count', 
+                'passenger_count'
+            ).order_by('distance_km')
+            
+            flights_data = []
+            for result in results:
+                flights_data.append({
+                    'airport_name': result['airport_name__en'],
+                    'distance_km': round(result['distance_km'], 3) if result['distance_km'] is not None else None,
+                    'avg_flight_time': str(result['avg_flight_time']) if result['avg_flight_time'] is not None else None,
+                    'flight_count': result['flight_count'],
+                    'passenger_count': result['passenger_count']
+                })
+            
+            return Response({'data': flights_data})
+            
+        except AirportsData.DoesNotExist:
+            return Response({
+                'status': 'error',
+                'message': f'Airport "{departure_airport_name}" not found'
+            }, status=status.HTTP_404_NOT_FOUND)
+            
+        except Exception as e:
+            return Response({
+                'status': 'error',
+                'message': str(e),
+                'parameters': {
+                    'departure_airport_name': departure_airport_name,
+                    'from_date': from_date,
+                    'to_date': to_date
+                }
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
-        return Response(results)
-        
+
 
 
 
 class FlightStatisticsSQL4(APIView):
     def get(self, request):
-
-        departure_airport = request.GET.get('departure_airport')
+        # Get parameters
+        departure_airport_name = request.GET.get('departure_airport_name')
         from_date = request.GET.get('from_date')
         to_date = request.GET.get('to_date')
         
+        # Validate required parameters
+        if not departure_airport_name:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Missing required parameter: departure_airport_name'
+            }, status=400)
+        
+        if not from_date or not to_date:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Missing required parameters: from_date and to_date'
+            }, status=400)
+
         query = """
         WITH depcity AS (
             SELECT airport_code,  
-                   RADIANS(a.coordinates[1])::float8 AS dep_lat,
-                   RADIANS(a.coordinates[0])::float8 AS dep_lon
+                   RADIANS(ST_Y(a.coordinates))::float8 AS dep_lat,
+                   RADIANS(ST_X(a.coordinates))::float8 AS dep_lon
             FROM bookings.airports_data a
             WHERE airport_name ->> 'en' = %s
         ),
@@ -318,8 +307,8 @@ class FlightStatisticsSQL4(APIView):
             SELECT f.*
             FROM bookings.flights f
             JOIN depcity d ON f.departure_airport = d.airport_code
-            WHERE f.scheduled_departure >= %s
-              AND f.scheduled_departure < %s
+            WHERE f.scheduled_departure >= %s::timestamp
+              AND f.scheduled_departure < %s::timestamp
         ),
         flights_list AS (
             SELECT 
@@ -334,9 +323,9 @@ class FlightStatisticsSQL4(APIView):
             ad.airport_name ->> 'en' AS airport_name,
             ROUND(
               6371 * ACOS(
-                  COS(d.dep_lat) * COS(RADIANS(ad.coordinates[1])) *
-                  COS(RADIANS(ad.coordinates[0]) - d.dep_lon) +
-                  SIN(d.dep_lat) * SIN(RADIANS(ad.coordinates[1]))
+                  COS(d.dep_lat) * COS(RADIANS(ST_Y(ad.coordinates))) *
+                  COS(RADIANS(ST_X(ad.coordinates)) - d.dep_lon) +
+                  SIN(d.dep_lat) * SIN(RADIANS(ST_Y(ad.coordinates)))
               )::numeric, 3
             ) AS distance_km,
             fl.avg_flight_time,
@@ -353,35 +342,80 @@ class FlightStatisticsSQL4(APIView):
         ORDER BY distance_km ASC;
         """
         
-        try:
-            with connection.cursor() as cursor:
-
-                cursor.execute(query, [departure_airport, from_date, to_date])
-                results = cursor.fetchall()
+        
+        with connection.cursor() as cursor:
+            # Execute the query with parameters
+            cursor.execute(query, [departure_airport_name, from_date, to_date])
+            results = cursor.fetchall()
                 
-
-                flights_data = []
-                for row in results:
-                    flights_data.append({
-                        'airport_name': row[0],
-                        'distance_km': float(row[1]) if row[1] else None,
-                        'avg_flight_time': str(row[2]) if row[2] else None,
-                        'flight_count': row[3],
-                        'passenger_count': row[4]
-                    })
-                
-                return JsonResponse({
-                    
-                    'data': flights_data,
+            # Process results
+            flights_data = []
+            for row in results:
+                flights_data.append({
+                    'airport_name': row[0],
+                    'distance_km': float(row[1]) if row[1] is not None else None,
+                    'avg_flight_time': str(row[2]) if row[2] is not None else None,
+                    'flight_count': row[3],
+                    'passenger_count': row[4]
                 })
                 
-        except Exception as e:
             return JsonResponse({
-                'status': 'error',
-                'message': str(e),
-                'parameters': {
-                    'departure_airport': departure_airport,
-                    'from_date': from_date,
-                    'to_date': to_date
-                }
-            }, status=500)
+                'data': flights_data
+            })
+                
+    
+
+
+
+
+class FlightStatisticsAPIView5(APIView):
+    def get(self, request):
+        departure_airport_name = request.GET.get('departure_airport_name')
+        from_date = request.GET.get('from_date')
+        to_date = request.GET.get('to_date')
+
+        
+        
+        dep_airport = AirportsData.objects.get(airport_name__en=departure_airport_name)
+
+        dep_lat = math.radians(dep_airport.coordinates.y)
+        dep_lon = math.radians(dep_airport.coordinates.x)
+        filtered_flights = Flights.objects.filter(
+            departure_airport=dep_airport,
+            scheduled_departure__gte=from_date,
+            scheduled_departure__lt=to_date
+        )
+
+
+        flights_list = filtered_flights.values('arrival_airport').annotate(
+            flight_ids=ArrayAgg('flight_id'),
+            avg_flight_time=Avg(F('actual_arrival') - F('actual_departure')),
+            flight_count=Count('flight_id')
+        )
+        results = []
+        for fl in flights_list:
+            arrival_airport = AirportsData.objects.get(airport_code=fl['arrival_airport'])
+            arr_lat = math.radians(arrival_airport.coordinates.y)
+            arr_lon = math.radians(arrival_airport.coordinates.x)
+            distance_km = round(6371 * math.acos(
+                math.cos(dep_lat) * math.cos(arr_lat) *
+                math.cos(arr_lon - dep_lon) +
+                math.sin(dep_lat) * math.sin(arr_lat)
+            ),3)
+            passenger_count = TicketFlights.objects.filter(flight_id__in=fl['flight_ids']).count()
+            avg_seconds = fl['avg_flight_time'].total_seconds() if fl['avg_flight_time'] else 0
+            avg_td = timedelta(seconds=avg_seconds)
+            avg_flight_time_str = str(avg_td)  # "HH:MM:SS" format
+
+            results.append({
+                'airport_name': arrival_airport.airport_name['en'],
+                'distance_km': distance_km,
+                'avg_flight_time': avg_flight_time_str,
+                'flight_count': fl['flight_count'],
+                'passenger_count': passenger_count
+            })
+        
+        results = sorted(results, key=lambda x: x['distance_km'])
+        return Response({'data': results})
+
+
