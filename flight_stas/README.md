@@ -19,7 +19,7 @@ INSTALLED_APPS = [
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.contrib.gis.db.backends.postgis',  # ✅ PostGIS backend
+        'ENGINE': 'django.contrib.gis.db.backends.postgis',  # PostGIS backend
         ...
     }
 }
