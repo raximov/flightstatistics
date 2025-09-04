@@ -16,7 +16,6 @@ from .models import AirportsData, Flights, TicketFlights
 
 class FlightStatisticsSQL(APIView):
     def get(self, request):
-        # Get parameters
         departure_airport_name = request.GET.get('departure_airport_name')
         from_date = request.GET.get('from_date')
         to_date = request.GET.get('to_date')
@@ -63,11 +62,11 @@ class FlightStatisticsSQL(APIView):
         
         
         with connection.cursor() as cursor:
-            # Execute the query with parameters
+
             cursor.execute(query, [departure_airport_name, from_date, to_date])
             results = cursor.fetchall()
                 
-            # Process results
+
             flights_data = []
             for row in results:
                 flights_data.append({
@@ -95,14 +94,12 @@ class FlightStatisticsAPIView(APIView):
         
         dep_airport = AirportsData.objects.get(airport_name__en=departure_airport_name)
 
-        # Filter flights
         filtered_flights = Flights.objects.filter(
             departure_airport=dep_airport,
             scheduled_departure__gte=from_date,
             scheduled_departure__lt=to_date
         )
 
-        # Annotate with distance
         flights_list = filtered_flights.values('arrival_airport').annotate(
             flight_ids=ArrayAgg('flight_id'),
             avg_flight_time=Avg(F('actual_arrival') - F('actual_departure')),
