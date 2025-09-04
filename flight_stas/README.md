@@ -29,13 +29,11 @@ DATABASES = {
 # sql da
 ALTER TABLE airports_data ALTER COLUMN coordinates TYPE geometry(Point, 4326) USING coordinates::geometry;
 
-#models.py
+# models.py da
 from django.contrib.gis.db import models as gis_models 
 
 class AirportsData(models.Model): 
-  # eski: coordinates = models.CharField(max_length=255) 
-  coordinates = gis_models.PointField(srid=4326, 
-  null=True, blank=True) 
+  coordinates = gis_models.PointField(srid=4326, null=True, blank=True) 
   
 
 python manage.py makemigrations 
