@@ -4,13 +4,16 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.http import JsonResponse
 from django.db import models, connection
-from django.db.models import F, Avg, Count, Value, FloatField
+from django.db.models import F, Avg, Count, Value, FloatField, OuterRef, Subquery, DurationField, ExpressionWrapper
+from django.db.models import Q
 from django.db.models.functions import Cast  # Buni ishlatib ko'ring
 
 from django.contrib.postgres.aggregates import ArrayAgg
 from django.db.models import Func
 from django.contrib.gis.db.models import GeometryField
 from datetime import timedelta
+from django.db.models.functions import Cast
+
 
 
 from .models import AirportsData, Flights, TicketFlights
@@ -139,14 +142,6 @@ class FlightStatisticsAPIView(APIView):
         return Response({'data': results})
 
 
-from django.db.models import F, Avg, Count, Value, FloatField
-from django.db.models.functions import Cast
-from django.contrib.gis.geos import Point
-from django.contrib.gis.db.models import GeometryField
-from rest_framework.response import Response
-from rest_framework.views import APIView
-from .models import Flights, AirportsData
-
 class FlightStatisticsAPIView2(APIView):
     def get(self, request):
         departure_airport_name = request.GET.get('departure_airport_name')
@@ -180,3 +175,57 @@ class FlightStatisticsAPIView2(APIView):
         )
 
         return Response({'data': list(flights_list)})
+
+
+class FlightStatisticsAPIView4(APIView):
+    def get(self, request):
+        departure_airport_name = request.GET.get('departure_airport_name')
+        from_date = request.GET.get('from_date')
+        to_date = request.GET.get('to_date')
+
+        # Departure airportni olish
+        dep_airport = AirportsData.objects.get(airport_name__en=departure_airport_name)
+
+        # Filterlangan flights
+        filtered_flights = Flights.objects.filter(
+            departure_airport=dep_airport,
+            scheduled_departure__gte=from_date,
+            scheduled_departure__lt=to_date
+        )
+
+        # Annotatsiya bilan umumiy statistika
+        flights_list = (
+            filtered_flights.values(
+                "arrival_airport__airport_code",
+                "arrival_airport__airport_name",
+            )
+            .annotate(
+                flight_count=Count("flight_id", distinct=True),
+                avg_flight_time=Avg(
+                    ExpressionWrapper(
+                        F("actual_arrival") - F("actual_departure"),
+                        output_field=DurationField(),
+                    )
+                ),
+                passenger_count=Count("ticketflights__ticket_no", distinct=True),
+                distance_km=ExpressionWrapper(
+                    DistanceSphere(
+                        F("arrival_airport__coordinates"),
+                        Value(dep_airport.coordinates, output_field=GeometryField()),
+                    )
+                    / 1000.0,
+                    output_field=FloatField(),
+                ),
+            )
+            .values(
+                airport_name=F("arrival_airport__airport_name"),
+                flight_count=F("flight_count"),
+                avg_flight_time=F("avg_flight_time"),
+                passenger_count=F("passenger_count"),
+                distance_km=F("distance_km"),
+            )
+            .order_by("distance_km")
+        )
+
+
+        return Response({"data": list(flights_list)})
