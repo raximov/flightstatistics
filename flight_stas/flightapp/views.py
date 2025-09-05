@@ -4,7 +4,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.http import JsonResponse
 from django.db import models, connection
-from django.db.models import F, Avg, Count, Value
+from django.db.models import F, Avg, Count, Value, FloatField
+from django.db.models.functions import Cast  
 from django.contrib.postgres.aggregates import ArrayAgg
 from django.db.models import Func
 from django.contrib.gis.db.models import GeometryField
@@ -135,3 +136,40 @@ class FlightStatisticsAPIView(APIView):
         
         results = sorted(results, key=lambda x: x['distance_km'] or 0)
         return Response({'data': results})
+
+
+class FlightStatisticsAPIView2(APIView):
+    def get(self, request):
+        departure_airport_name = request.GET.get('departure_airport_name')
+        from_date = request.GET.get('from_date')
+        to_date = request.GET.get('to_date')        
+        
+        dep_airport = AirportsData.objects.get(airport_name__en=departure_airport_name)
+
+        flights_list = (
+            Flights.objects.filter(
+                departure_airport=dep_airport,
+                scheduled_departure__gte=from_date,
+                scheduled_departure__lt=to_date
+            )
+            .values(
+                'arrival_airport',
+                'arrival_airport__airport_name',
+            )
+            .annotate(
+                flight_ids=ArrayAgg('flight_id'),
+                avg_flight_time=Avg(F('actual_arrival') - F('actual_departure')),
+                flight_count=Count('flight_id'),
+                distance_km=Cast(
+                    DistanceSphere(
+                        F('arrival_airport__coordinates'),
+                        Value(dep_airport.coordinates, output_field=GeometryField())
+                    ) / 1000.0,
+                    FloatField()
+                ),
+                passenger_count=Count('ticketflights__id')
+            )
+            .order_by('distance_km')
+        )
+
+        return Response({'data': list(flights_list)})    
