@@ -5,7 +5,8 @@ from rest_framework.response import Response
 from django.http import JsonResponse
 from django.db import models, connection
 from django.db.models import F, Avg, Count, Value, FloatField
-from django.db.models.functions import Cast  
+from django.db.models.functions import Cast  # Buni ishlatib ko'ring
+
 from django.contrib.postgres.aggregates import ArrayAgg
 from django.db.models import Func
 from django.contrib.gis.db.models import GeometryField
@@ -138,6 +139,14 @@ class FlightStatisticsAPIView(APIView):
         return Response({'data': results})
 
 
+from django.db.models import F, Avg, Count, Value, FloatField
+from django.db.models.functions import Cast
+from django.contrib.gis.geos import Point
+from django.contrib.gis.db.models import GeometryField
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from .models import Flights, AirportsData
+
 class FlightStatisticsAPIView2(APIView):
     def get(self, request):
         departure_airport_name = request.GET.get('departure_airport_name')
@@ -153,13 +162,11 @@ class FlightStatisticsAPIView2(APIView):
                 scheduled_departure__lt=to_date
             )
             .values(
-                'arrival_airport',
-                'arrival_airport__airport_name',
+                'arrival_airport__airport_name__en',
             )
             .annotate(
-                flight_ids=ArrayAgg('flight_id'),
                 avg_flight_time=Avg(F('actual_arrival') - F('actual_departure')),
-                flight_count=Count('flight_id'),
+                flight_count=Count('flight_id', distinct=True),
                 distance_km=Cast(
                     DistanceSphere(
                         F('arrival_airport__coordinates'),
@@ -167,9 +174,9 @@ class FlightStatisticsAPIView2(APIView):
                     ) / 1000.0,
                     FloatField()
                 ),
-                passenger_count=Count('ticketflights__id')
+                passenger_count=Count('ticketflights__ticket_no')
             )
             .order_by('distance_km')
         )
 
-        return Response({'data': list(flights_list)})    
+        return Response({'data': list(flights_list)})

@@ -5,6 +5,6 @@ urlpatterns = [
    
     path('stats1/', FlightStatisticsSQL.as_view()),
     path('stats2/', FlightStatisticsAPIView.as_view()),
-    path('stats3/', FlightStatisticsAPIView.as_view())
+    path('stats3/', FlightStatisticsAPIView2.as_view())
 
 ]
