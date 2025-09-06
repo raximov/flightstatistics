@@ -125,9 +125,7 @@ class FlightStatisticsAPIView(APIView):
         ).values('count')[:1]
 
 
-        filtered_flights = Flights.objects.defer(
-            'flight_no', 'scheduled_arrival', 'status'
-        ).filter(
+        filtered_flights = Flights.objects.filter(
             departure_airport=dep_airport,
             scheduled_departure__gte=from_date,
             scheduled_departure__lt=to_date
@@ -136,6 +134,8 @@ class FlightStatisticsAPIView(APIView):
                 passenger_count_subquery, output_field=IntegerField()
             )
         )
+
+        # raise Exception(filtered_flights.values()[0])
 
         flights_list = filtered_flights.values('arrival_airport__airport_name__en').annotate(
             avg_flight_time=Avg(F('actual_arrival') - F('actual_departure')),
