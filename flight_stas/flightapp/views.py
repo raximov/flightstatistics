@@ -20,6 +20,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.db.models import OuterRef, Subquery
 from django.contrib.gis.geos import Point
+from django.db.models.functions import Coalesce
+
 
 
 
@@ -144,7 +146,7 @@ class FlightStatisticsAPIView(APIView):
                 F('arrival_airport__coordinates'),
                 Value(dep_airport.coordinates, output_field=GeometryField())
             ),
-            total_passengers=Sum('passenger_count')
+            total_passengers=Coalesce(Sum('passenger_count'), Value(0))
         )
 
         results = sorted(flights_list, key=lambda x: x['distance_km'] or 0)
